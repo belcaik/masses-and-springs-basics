@@ -18,6 +18,7 @@ import PeriodTraceNode from '../../../../masses-and-springs/js/lab/view/PeriodTr
 import VectorVisibilityControlNode from '../../../../masses-and-springs/js/vectors/view/VectorVisibilityControlNode.js';
 import VBox from '../../../../scenery/js/layout/nodes/VBox.js';
 import Text from '../../../../scenery/js/nodes/Text.js';
+import RectangularPushButton from '../../../../sun/js/buttons/RectangularPushButton.js';
 import LineOptionsNode from '../../common/view/LineOptionsNode.js';
 import massesAndSpringsBasics from '../../massesAndSpringsBasics.js';
 import MassesAndSpringsBasicsStrings from '../../MassesAndSpringsBasicsStrings.js';
@@ -66,8 +67,111 @@ class LabScreenView extends OneSpringScreenView {
       } );
 
     // Contains all of the options for the reference lines, gravity, damping, and toolbox
+    // Export period CSV button and panel
+    // Internal recorder state
+    this._simTimeSeconds = 0; // simulation time accumulator for timestamps
+    this._periodData = []; // { t: number, period: number }[]
+    this._lastPeakTimeByDir = { 1: null, '-1': null };
+    this._recordingActive = false; // gated by Start/Stop Recording buttons
+    this._ySamples = []; // { t: number, y: number }[] continuous samples while recording
+
+    // Helper to check if we should record data (match PeriodTrace visibility/conditions)
+    const canRecordPeriod = () => {
+      const spring = model.firstSpring;
+      const mass = spring.massAttachedProperty.value;
+      return !!( this._recordingActive &&
+                 mass && !mass.userControlledProperty.value &&
+                 spring.periodTraceVisibilityProperty.value &&
+                 mass.verticalVelocityProperty.value !== 0 );
+    };
+
+    // Listen for peaks (1 for upward, -1 for downward) and compute full period between same-direction peaks
+    model.firstSpring.peakEmitter.addListener( direction => {
+      if ( canRecordPeriod() ) {
+        const t = this._simTimeSeconds;
+        const key = String( direction );
+        const last = this._lastPeakTimeByDir[ key ];
+        if ( typeof last === 'number' ) {
+          const period = t - last;
+          if ( period > 0 ) {
+            const yRel = model.firstSpring.massEquilibriumDisplacementProperty.value;
+            this._periodData.push( { t, period, y: typeof yRel === 'number' ? yRel : 0 } );
+          }
+        }
+        this._lastPeakTimeByDir[ key ] = t;
+      }
+    } );
+
+    // Clear last-peak memory when the period trace is turned off
+    model.firstSpring.periodTraceVisibilityProperty.lazyLink( visible => {
+      if ( !visible ) {
+        this._lastPeakTimeByDir = { 1: null, '-1': null };
+      }
+    } );
+
+    // Export and Recording buttons
+    const startButton = new RectangularPushButton( {
+      content: new Text( 'Start Recording' ),
+      listener: () => {
+        this._periodData = [];
+        this._ySamples = [];
+        this._lastPeakTimeByDir = { 1: null, '-1': null };
+        this._simTimeSeconds = 0;
+        this._recordingActive = true;
+      }
+    } );
+
+    const stopButton = new RectangularPushButton( {
+      content: new Text( 'Stop Recording' ),
+      listener: () => {
+        this._recordingActive = false;
+      }
+    } );
+
+    // Export button
+    const exportButton = new RectangularPushButton( {
+      content: new Text( 'Export Period CSV' ),
+      listener: () => {
+        if ( this._periodData.length === 0 ) {
+          // Nothing to export; silently no-op
+          return;
+        }
+        // Build unified CSV with both samples and period points
+        // time_s starts at 0 on recording start; y is measured relative to center of oscillation
+        const header = 'kind,time_s,period_s,y_rel_center_m\n';
+
+        // Merge and sort by time for readability
+        const combined = [
+          ...this._ySamples.map( s => ( { kind: 'sample', t: s.t, period: '', y: s.y } ) ),
+          ...this._periodData.map( d => ( { kind: 'period', t: d.t, period: d.period, y: d.y } ) )
+        ].sort( ( a, b ) => a.t - b.t );
+
+        const rows = combined.map( r => `${r.kind},${r.t.toFixed( 3 )},${r.period === '' ? '' : r.period.toFixed( 3 )},${r.y.toFixed( 4 )}` ).join( '\n' );
+        const csv = header + rows + '\n';
+
+        try {
+          const blob = new Blob( [ csv ], { type: 'text/csv;charset=utf-8;' } );
+          const url = URL.createObjectURL( blob );
+          const a = document.createElement( 'a' );
+          a.href = url;
+          a.download = 'period_vs_time.csv';
+          document.body.appendChild( a );
+          a.click();
+          document.body.removeChild( a );
+          setTimeout( () => URL.revokeObjectURL( url ), 1000 );
+        }
+        catch( e ) {
+          // Fallback: open data in a new tab
+          const dataUrl = 'data:text/csv;charset=utf-8,' + encodeURIComponent( csv );
+          window.open( dataUrl );
+        }
+      }
+    } );
+
+    const exportPanel = this.createOptionsPanel( new VBox( { children: [ startButton, stopButton, exportButton ], spacing: 8 } ), this.rightPanelAlignGroup, tandem );
+
     const rightPanelsVBox = new VBox( {
-      children: [ optionsPanel, gravityAccordionBox, this.toolboxPanel ],
+      children: [ optionsPanel, gravityAccordionBox, this.toolboxPanel, exportPanel ],
       spacing: this.spacing * 0.9
     } );
 
@@ -148,6 +252,11 @@ class LabScreenView extends OneSpringScreenView {
 
     this.resetAllButton.addListener( () => {
       this.movableLineNode.reset();
+      // Clear recorded period data and clock on reset-all
+      this._periodData = [];
+      this._ySamples = [];
+      this._lastPeakTimeByDir = { 1: null, '-1': null };
+      this._simTimeSeconds = 0;
     } );
 
     // Back layer used to handle z order of view elements.
@@ -166,6 +275,21 @@ class LabScreenView extends OneSpringScreenView {
    * @param {number} dt
    */
   step( dt ) {
+    // Record samples at the current time, then advance clock.
+    // This ensures the first recorded timestamp is exactly 0.00 s.
+    if ( this.model.playingProperty.value ) {
+      // Record intermediate y samples while recording and conditions hold
+      const spring = this.model.firstSpring;
+      const mass = spring.massAttachedProperty.value;
+      if ( this._recordingActive && mass && !mass.userControlledProperty.value && spring.periodTraceVisibilityProperty.value ) {
+        const yRel = spring.massEquilibriumDisplacementProperty.value;
+        const y = ( typeof yRel === 'number' ) ? yRel : 0;
+        this._ySamples.push( { t: this._simTimeSeconds, y } );
+      }
+
+      // Advance local simulation clock for timestamping after sampling
+      this._simTimeSeconds += dt;
+    }
     this.periodTraceNode.step( dt, this.model.playingProperty );
   }
 }
