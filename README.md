@@ -1,3 +1,5 @@
+> **Warning:** This repository is a fork of the original PhET simulation, adapted for the Universidad Andrés Bello (UNAB) context. The main goal is to make data export to CSV as easy as possible. Please note that this implementation prioritizes simplicity over aesthetics.
+
 Masses and Springs: Basics
 =============
 "Masses and Springs: Basics" is an educational simulation in HTML5, by <a href="https://phet.colorado.edu/" target="_blank">PhET
@@ -37,7 +39,6 @@ git clone https://github.com/phetsims/griddle.git
 git clone https://github.com/phetsims/joist.git
 git clone https://github.com/phetsims/kite.git
 git clone https://github.com/phetsims/masses-and-springs.git
-git clone https://github.com/phetsims/masses-and-springs-basics.git
 git clone https://github.com/phetsims/perennial.git perennial-alias
 git clone https://github.com/phetsims/phet-core.git
 git clone https://github.com/phetsims/phetcommon.git
@@ -51,6 +52,8 @@ git clone https://github.com/phetsims/tambo.git
 git clone https://github.com/phetsims/tandem.git
 git clone https://github.com/phetsims/twixt.git
 git clone https://github.com/phetsims/utterance-queue.git
+
+git clone https://github.com/belcaik/masses-and-springs-basics.git
 ```
 
 (2) Install dev dependencies:
